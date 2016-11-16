@@ -1,0 +1,6 @@
+[run]
+branch = True
+source = waterfall
+
+[report]
+ignore_errors = True
