@@ -23,40 +23,13 @@ from sqlalchemy import UniqueConstraint
 
 BASE = declarative_base()
 
-ITEMS_OS_ID_INDEX_NAME = 'items_os_id_idx'
 
-
-class EC2Base(models.ModelBase):
-    metadata = None
-
-    def save(self, session=None):
-        from waterfall.db.sqlalchemy import api
-
-        if session is None:
-            session = api.get_session()
-
-        super(EC2Base, self).save(session=session)
-
-
-class Item(BASE, EC2Base):
-    __tablename__ = 'items'
+class Workflow(models.ModelBase, models.TimestampMixin):
+    __tablename__ = 'workflows'
     __table_args__ = (
         PrimaryKeyConstraint('id'),
-        UniqueConstraint('os_id', name=ITEMS_OS_ID_INDEX_NAME),
     )
-    id = Column(String(length=30))
-    project_id = Column(String(length=64))
-    vpc_id = Column(String(length=12))
-    os_id = Column(String(length=36))
-    data = Column(Text())
-
-
-class Tag(BASE, EC2Base):
-    __tablename__ = 'tags'
-    __table_args__ = (
-        PrimaryKeyConstraint('project_id', 'item_id', 'key'),
-    )
-    project_id = Column(String(length=64))
-    item_id = Column(String(length=30))
-    key = Column(String(length=127))
-    value = Column(String(length=255))
+    project_id = Column(String(length=255))
+    user_id = Column(String(length=255))
+    resource_type = Column(String(length=255))
+    payload = Column(Text())

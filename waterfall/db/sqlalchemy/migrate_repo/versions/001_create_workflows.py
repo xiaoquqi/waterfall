@@ -13,7 +13,7 @@
 #    under the License.
 
 from sqlalchemy import Column, MetaData
-from sqlalchemy import PrimaryKeyConstraint, String, Table, Text
+from sqlalchemy import DateTime, PrimaryKeyConstraint, String, Table, Text
 from sqlalchemy import UniqueConstraint
 
 
@@ -22,6 +22,9 @@ def upgrade(migrate_engine):
     meta.bind = migrate_engine
 
     workflows = Table('workflows', meta,
+        Column('created_at', DateTime),
+        Column('updated_at', DateTime),
+        Column('deleted_at', DateTime),
         Column("id", String(length=30)),
         Column("project_id", String(length=255)),
         Column("user_id", String(length=255)),
