@@ -1,4 +1,5 @@
-#    Copyright 2013 Cloudscaling Group, Inc
+#!/usr/bin/env python
+# Copyright 2013 OpenStack Foundation
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -12,8 +13,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import os
+
+from waterfall.db.sqlalchemy import migrate_repo
+
 from migrate.versioning.shell import main
 
 
 if __name__ == '__main__':
-    main(debug='False', repository='.')
+    main(debug='False',
+         repository=os.path.abspath(os.path.dirname(migrate_repo.__file__)))

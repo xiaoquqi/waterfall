@@ -18,11 +18,11 @@ See http://docs.openstack.org/developer/oslo.i18n/usage.html .
 
 """
 
-import oslo_i18n
+import oslo_i18n as i18n
 
-DOMAIN = 'ec2-api'
+DOMAIN = 'waterfall'
 
-_translators = oslo_i18n.TranslatorFactory(domain=DOMAIN)
+_translators = i18n.TranslatorFactory(domain=DOMAIN)
 
 # The primary translation function using the well-known name "_"
 _ = _translators.primary
@@ -38,9 +38,13 @@ _LE = _translators.log_error
 _LC = _translators.log_critical
 
 
-def translate(value, user_locale):
-    return oslo_i18n.translate(value, user_locale)
+def enable_lazy(enable=True):
+    return i18n.enable_lazy(enable)
+
+
+def translate(value, user_locale=None):
+    return i18n.translate(value, user_locale)
 
 
 def get_available_languages():
-    return oslo_i18n.get_available_languages(DOMAIN)
+    return i18n.get_available_languages(DOMAIN)

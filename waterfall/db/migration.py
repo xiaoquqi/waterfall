@@ -1,4 +1,6 @@
-#    Copyright 2013 Cloudscaling Group, Inc
+# Copyright 2010 United States Government as represented by the
+# Administrator of the National Aeronautics and Space Administration.
+# All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -14,63 +16,58 @@
 
 """Database setup and migration commands."""
 
-from oslo_config import cfg
+import os
+import threading
 
+from oslo_config import cfg
+from oslo_db import options
+from stevedore import driver
+
+from waterfall.db.sqlalchemy import api as db_api
 from waterfall import exception
 from waterfall.i18n import _
 
-CONF = cfg.CONF
+
+INIT_VERSION = 000
+
+_IMPL = None
+_LOCK = threading.Lock()
+
+options.set_defaults(cfg.CONF)
+
+MIGRATE_REPO_PATH = os.path.join(
+    os.path.abspath(os.path.dirname(__file__)),
+    'sqlalchemy',
+    'migrate_repo',
+)
 
 
-class LazyPluggable(object):
-    """A pluggable backend loaded lazily based on some value."""
-
-    def __init__(self, pivot, config_group=None, **backends):
-        self.__backends = backends
-        self.__pivot = pivot
-        self.__backend = None
-        self.__config_group = config_group
-
-    def __get_backend(self):
-        if not self.__backend:
-            if self.__config_group is None:
-                backend_name = CONF[self.__pivot]
-            else:
-                backend_name = CONF[self.__config_group][self.__pivot]
-            if backend_name not in self.__backends:
-                msg = _('Invalid backend: %s') % backend_name
-                raise exception.EC2Exception(msg)
-
-            backend = self.__backends[backend_name]
-            if isinstance(backend, tuple):
-                name = backend[0]
-                fromlist = backend[1]
-            else:
-                name = backend
-                fromlist = backend
-
-            self.__backend = __import__(name, None, None, fromlist)
-        return self.__backend
-
-    def __getattr__(self, key):
-        backend = self.__get_backend()
-        return getattr(backend, key)
-
-IMPL = LazyPluggable('backend',
-                     config_group='database',
-                     sqlalchemy='waterfall.db.sqlalchemy.migration')
+def get_backend():
+    global _IMPL
+    if _IMPL is None:
+        with _LOCK:
+            if _IMPL is None:
+                _IMPL = driver.DriverManager(
+                    "waterfall.database.migration_backend",
+                    cfg.CONF.database.backend).driver
+    return _IMPL
 
 
-def db_sync(version=None):
+def db_sync(version=None, init_version=INIT_VERSION, engine=None):
     """Migrate the database to `version` or the most recent version."""
-    return IMPL.db_sync(version=version)
 
+    if engine is None:
+        engine = db_api.get_engine()
 
-def db_version():
-    """Display the current database version."""
-    return IMPL.db_version()
+    current_db_version = get_backend().db_version(engine,
+                                                  MIGRATE_REPO_PATH,
+                                                  init_version)
 
-
-def db_initial_version():
-    """The starting version for the database."""
-    return IMPL.db_initial_version()
+    # TODO(e0ne): drop version validation when new oslo.db will be released
+    if version and int(version) < current_db_version:
+        msg = _('Database schema downgrade is not allowed.')
+        raise exception.InvalidInput(reason=msg)
+    return get_backend().db_sync(engine=engine,
+                                 abs_path=MIGRATE_REPO_PATH,
+                                 version=version,
+                                 init_version=init_version)

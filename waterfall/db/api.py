@@ -1,4 +1,7 @@
-#    Copyright 2013 Cloudscaling Group, Inc
+# Copyright (c) 2011 X.commerce, a business unit of eBay Inc.
+# Copyright 2010 United States Government as represented by the
+# Administrator of the National Aeronautics and Space Administration.
+# All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
@@ -17,116 +20,123 @@
 Functions in this module are imported into the waterfall.db namespace. Call these
 functions from waterfall.db namespace, not the waterfall.db.api namespace.
 
-**Related Flags**
+All functions in this module return objects that implement a dictionary-like
+interface. Currently, many of these objects are sqlalchemy objects that
+implement a dictionary interface. However, a future goal is to have all of
+these objects be simple dictionaries.
 
-:dbackend:  string to lookup in the list of LazyPluggable backends.
-            `sqlalchemy` is the only supported backend right now.
+
+**Related Flags**
 
 :connection:  string specifying the sqlalchemy connection to use, like:
               `sqlite:///var/lib/waterfall/waterfall.sqlite`.
 
+:enable_new_services:  when adding a new service to the database, is it in the
+                       pool of available hardware (Default: True)
+
 """
 
-from eventlet import tpool
 from oslo_config import cfg
-from oslo_db import api as db_api
-from oslo_log import log as logging
+from oslo_db import concurrency as db_concurrency
+from oslo_db import options as db_options
 
+from waterfall.api import common
+from waterfall.common import constants
+from waterfall.i18n import _
 
-tpool_opts = [
-    cfg.BoolOpt('use_tpool',
-                default=False,
-                deprecated_name='dbapi_use_tpool',
-                deprecated_group='DEFAULT',
-                help='Enable the experimental use of thread pooling for '
-                     'all DB API calls'),
-]
+db_opts = [
+    cfg.BoolOpt('enable_new_services',
+                default=True,
+                help='Services to be added to the available pool on create'),
+    cfg.StrOpt('workflow_name_template',
+               default='workflow-%s',
+               help='Template string to be used to generate workflow names'),
+    cfg.StrOpt('snapshot_name_template',
+               default='snapshot-%s',
+               help='Template string to be used to generate snapshot names'),
+    cfg.StrOpt('backup_name_template',
+               default='backup-%s',
+               help='Template string to be used to generate backup names'), ]
+
 
 CONF = cfg.CONF
-CONF.register_opts(tpool_opts, 'database')
+CONF.register_opts(db_opts)
+db_options.set_defaults(CONF)
+CONF.set_default('sqlite_db', 'waterfall.sqlite', group='database')
 
 _BACKEND_MAPPING = {'sqlalchemy': 'waterfall.db.sqlalchemy.api'}
 
 
-class EC2DBAPI(object):
-    """ec2's DB API wrapper class.
+IMPL = db_concurrency.TpoolDbapiWrapper(CONF, _BACKEND_MAPPING)
 
-    This wraps the oslo DB API with an option to be able to use eventlet's
-    thread pooling. Since the CONF variable may not be loaded at the time
-    this class is instantiated, we must look at it on the first DB API call.
+# The maximum value a signed INT type may have
+MAX_INT = constants.DB_MAX_INT
+
+
+###################
+
+def dispose_engine():
+    """Force the engine to establish new connections."""
+
+    # FIXME(jdg): When using sqlite if we do the dispose
+    # we seem to lose our DB here.  Adding this check
+    # means we don't do the dispose, but we keep our sqlite DB
+    # This likely isn't the best way to handle this
+
+    if 'sqlite' not in IMPL.get_engine().name:
+        return IMPL.dispose_engine()
+    else:
+        return
+
+
+###################
+
+
+class Condition(object):
+    """Class for normal condition values for conditional_update."""
+    def __init__(self, value, field=None):
+        self.value = value
+        # Field is optional and can be passed when getting the filter
+        self.field = field
+
+    def get_filter(self, model, field=None):
+        return IMPL.condition_db_filter(model, self._get_field(field),
+                                        self.value)
+
+    def _get_field(self, field=None):
+        # We must have a defined field on initialization or when called
+        field = field or self.field
+        if not field:
+            raise ValueError(_('Condition has no field.'))
+        return field
+
+
+class Not(Condition):
+    """Class for negated condition values for conditional_update.
+
+    By default NULL values will be treated like Python treats None instead of
+    how SQL treats it.
+
+    So for example when values are (1, 2) it will evaluate to True when we have
+    value 3 or NULL, instead of only with 3 like SQL does.
     """
+    def __init__(self, value, field=None, auto_none=True):
+        super(Not, self).__init__(value, field)
+        self.auto_none = auto_none
 
-    def __init__(self):
-        self.__db_api = None
+    def get_filter(self, model, field=None):
+        # If implementation has a specific method use it
+        if hasattr(IMPL, 'condition_not_db_filter'):
+            return IMPL.condition_not_db_filter(model, self._get_field(field),
+                                                self.value, self.auto_none)
 
-    @property
-    def _db_api(self):
-        if not self.__db_api:
-            ec2_db_api = db_api.DBAPI(CONF.database.backend,
-                                      backend_mapping=_BACKEND_MAPPING)
-            if CONF.database.use_tpool:
-                self.__db_api = tpool.Proxy(ec2_db_api)
-            else:
-                self.__db_api = ec2_db_api
-        return self.__db_api
-
-    def __getattr__(self, key):
-        return getattr(self._db_api, key)
+        # Otherwise non negated object must adming ~ operator for not
+        return ~super(Not, self).get_filter(model, field)
 
 
-IMPL = EC2DBAPI()
-
-LOG = logging.getLogger(__name__)
-
-
-def add_item(context, kind, data):
-    return IMPL.add_item(context, kind, data)
-
-
-def add_item_id(context, kind, os_id, project_id=None):
-    return IMPL.add_item_id(context, kind, os_id, project_id)
-
-
-def update_item(context, item):
-    IMPL.update_item(context, item)
-
-
-def delete_item(context, item_id):
-    IMPL.delete_item(context, item_id)
-
-
-def restore_item(context, kind, data):
-    return IMPL.restore_item(context, kind, data)
-
-
-def get_items(context, kind):
-    return IMPL.get_items(context, kind)
-
-
-def get_item_by_id(context, item_id):
-    return IMPL.get_item_by_id(context, item_id)
-
-
-def get_items_by_ids(context, item_ids):
-    return IMPL.get_items_by_ids(context, item_ids)
-
-
-def get_public_items(context, kind, item_ids=None):
-    return IMPL.get_public_items(context, kind, item_ids)
-
-
-def get_items_ids(context, kind, item_ids=None, item_os_ids=None):
-    return IMPL.get_items_ids(context, kind, item_ids=item_ids,
-                              item_os_ids=item_os_ids)
-
-
-def add_tags(context, tags):
-    return IMPL.add_tags(context, tags)
-
-
-def delete_tags(context, item_ids, tag_pairs=None):
-    return IMPL.delete_tags(context, item_ids, tag_pairs)
-
-
-def get_tags(context, kinds=None, item_ids=None):
-    return IMPL.get_tags(context, kinds, item_ids)
+class Case(object):
+    """Class for conditional value selection for conditional_update."""
+    def __init__(self, whens, value=None, else_=None):
+        self.whens = whens
+        self.value = value
+        self.else_ = else_

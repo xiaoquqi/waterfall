@@ -1,20 +1,22 @@
-# Copyright 2014
-# The Cloudscaling Group, Inc.
+# Copyright 2010 United States Government as represented by the
+# Administrator of the National Aeronautics and Space Administration.
+# All Rights Reserved.
 #
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-# http://www.apache.org/licenses/LICENSE-2.0
+#    Licensed under the Apache License, Version 2.0 (the "License"); you may
+#    not use this file except in compliance with the License. You may obtain
+#    a copy of the License at
 #
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
+#         http://www.apache.org/licenses/LICENSE-2.0
+#
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
+#    WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
+#    License for the specific language governing permissions and limitations
+#    under the License.
 
-"""waterfall base exception handling.
+"""Waterfall base exception handling.
 
-Includes decorator for re-raising waterfall-type exceptions.
+Includes decorator for re-raising Waterfall-type exceptions.
 
 SHOULD include dedicated exception logging.
 
@@ -24,471 +26,1094 @@ import sys
 
 from oslo_config import cfg
 from oslo_log import log as logging
+from oslo_versionedobjects import exception as obj_exc
 import six
+import webob.exc
+from webob.util import status_generic_reasons
+from webob.util import status_reasons
 
-from waterfall.i18n import _
+from waterfall.i18n import _, _LE
+
 
 LOG = logging.getLogger(__name__)
 
 exc_log_opts = [
     cfg.BoolOpt('fatal_exception_format_errors',
                 default=False,
-                help='Make exception message format errors fatal'),
+                help='Make exception message format errors fatal.'),
 ]
 
 CONF = cfg.CONF
 CONF.register_opts(exc_log_opts)
 
 
-class EC2APIException(Exception):
-    """Base EC2 API Exception
+class ConvertedException(webob.exc.WSGIHTTPException):
+    def __init__(self, code=500, title="", explanation=""):
+        self.code = code
+        # There is a strict rule about constructing status line for HTTP:
+        # '...Status-Line, consisting of the protocol version followed by a
+        # numeric status code and its associated textual phrase, with each
+        # element separated by SP characters'
+        # (http://www.faqs.org/rfcs/rfc2616.html)
+        # 'code' and 'title' can not be empty because they correspond
+        # to numeric status code and its associated text
+        if title:
+            self.title = title
+        else:
+            try:
+                self.title = status_reasons[self.code]
+            except KeyError:
+                generic_code = self.code // 100
+                self.title = status_generic_reasons[generic_code]
+        self.explanation = explanation
+        super(ConvertedException, self).__init__()
+
+
+class Error(Exception):
+    pass
+
+
+class WaterfallException(Exception):
+    """Base Waterfall Exception
 
     To correctly use this class, inherit from it and define
-    a 'msg_fmt' property. That msg_fmt will get printf'd
+    a 'message' property. That message will get printf'd
     with the keyword arguments provided to the constructor.
+
     """
-    msg_fmt = _('An unknown exception occurred.')
+    message = _("An unknown exception occurred.")
+    code = 500
+    headers = {}
+    safe = False
 
     def __init__(self, message=None, **kwargs):
         self.kwargs = kwargs
+        self.kwargs['message'] = message
 
-        if not message:
+        if 'code' not in self.kwargs:
             try:
-                message = self.msg_fmt % kwargs
+                self.kwargs['code'] = self.code
+            except AttributeError:
+                pass
+
+        for k, v in self.kwargs.items():
+            if isinstance(v, Exception):
+                self.kwargs[k] = six.text_type(v)
+
+        if self._should_format():
+            try:
+                message = self.message % kwargs
+
             except Exception:
                 exc_info = sys.exc_info()
                 # kwargs doesn't match a variable in the message
                 # log the issue and the kwargs
-                LOG.exception(_('Exception in string format operation for '
-                                '%s exception'), self.__class__.__name__)
-                for name, value in six.iteritems(kwargs):
-                    LOG.error('%s: %s' % (name, value))
-
+                LOG.exception(_LE('Exception in string format operation'))
+                for name, value in kwargs.items():
+                    LOG.error(_LE("%(name)s: %(value)s"),
+                              {'name': name, 'value': value})
                 if CONF.fatal_exception_format_errors:
                     six.reraise(*exc_info)
-                else:
-                    # at least get the core message out if something happened
-                    message = self.msg_fmt
-        elif not isinstance(message, six.string_types):
-            LOG.error(_("Message '%(msg)s' for %(ex)s exception is not "
-                        "a string"),
-                      {'msg': message, 'ex': self.__class__.__name__})
-            if CONF.fatal_exception_format_errors:
-                raise TypeError(_('Invalid exception message format'))
-            else:
-                message = self.msg_fmt
+                # at least get the core message out if something happened
+                message = self.message
+        elif isinstance(message, Exception):
+            message = six.text_type(message)
 
-        super(EC2APIException, self).__init__(message)
+        # NOTE(luisg): We put the actual message in 'msg' so that we can access
+        # it, because if we try to access the message via 'message' it will be
+        # overshadowed by the class' message attribute
+        self.msg = message
+        super(WaterfallException, self).__init__(message)
 
-    def format_message(self):
-        # NOTE(mrodden): use the first argument to the python Exception object
-        # which should be our full EC2APIException message, (see __init__)
-        return self.args[0]
+    def _should_format(self):
+        return self.kwargs['message'] is None or '%(message)' in self.message
+
+    def __unicode__(self):
+        return six.text_type(self.msg)
 
 
-# Internal waterfall exceptions
-
-class EC2APIConfigNotFound(EC2APIException):
-    msg_fmt = _("Could not find config at %(path)s")
-
-
-class EC2APIPasteAppNotFound(EC2APIException):
-    msg_fmt = _("Could not load paste app '%(name)s' from %(path)s")
+class WorkflowBackendAPIException(WaterfallException):
+    message = _("Bad or unexpected response from the storage workflow "
+                "backend API: %(data)s")
 
 
-class EC2KeystoneDiscoverFailure(EC2APIException):
-    msg_fmt = _("Could not discover keystone versions.")
+class WorkflowDriverException(WaterfallException):
+    message = _("Workflow driver reported an error: %(message)s")
 
 
-class EC2DBInvalidOsIdUpdate(EC2APIException):
-    msg_fmt = _('Invalid update of os_id of %(item_id)s item '
-                'from %(old_os_id)s to %(new_os_id)s')
+class BackupDriverException(WaterfallException):
+    message = _("Backup driver reported an error: %(message)s")
 
 
-class EC2DBDuplicateEntry(EC2APIException):
-    msg_fmt = _('Entry %(id)s already exists in DB.')
+class GlanceConnectionFailed(WaterfallException):
+    message = _("Connection to glance failed: %(reason)s")
 
 
-# Internal waterfall metadata exceptions
-
-class EC2MetadataException(EC2APIException):
-    pass
-
-
-class EC2MetadataNotFound(EC2MetadataException):
-    pass
+class NotAuthorized(WaterfallException):
+    message = _("Not authorized.")
+    code = 403
 
 
-class EC2MetadataInvalidAddress(EC2MetadataException):
-    pass
+class AdminRequired(NotAuthorized):
+    message = _("User does not have admin privileges")
 
 
-# Intermediate exception classes to organize AWS exception hierarchy
+class PolicyNotAuthorized(NotAuthorized):
+    message = _("Policy doesn't allow %(action)s to be performed.")
 
-class EC2Exception(EC2APIException):
-    """Base EC2 compliant exception
 
-    To correctly use this class, inherit from it and define
-    a 'ec2_code' property if a new class name doesn't coincide with
-    AWS Error Code.
-    """
+class ImageNotAuthorized(WaterfallException):
+    message = _("Not authorized for image %(image_id)s.")
+
+
+class DriverNotInitialized(WaterfallException):
+    message = _("Workflow driver not ready.")
+
+
+class Invalid(WaterfallException):
+    message = _("Unacceptable parameters.")
     code = 400
 
 
-class EC2InvalidException(EC2Exception):
+class InvalidSnapshot(Invalid):
+    message = _("Invalid snapshot: %(reason)s")
+
+
+class InvalidWorkflowAttachMode(Invalid):
+    message = _("Invalid attaching mode '%(mode)s' for "
+                "workflow %(workflow_id)s.")
+
+
+class WorkflowAttached(Invalid):
+    message = _("Workflow %(workflow_id)s is still attached, detach workflow first.")
+
+
+class InvalidResults(Invalid):
+    message = _("The results are invalid.")
+
+
+class InvalidInput(Invalid):
+    message = _("Invalid input received: %(reason)s")
+
+
+class InvalidWorkflowType(Invalid):
+    message = _("Invalid workflow type: %(reason)s")
+
+
+class InvalidWorkflow(Invalid):
+    message = _("Invalid workflow: %(reason)s")
+
+
+class InvalidContentType(Invalid):
+    message = _("Invalid content type %(content_type)s.")
+
+
+class InvalidHost(Invalid):
+    message = _("Invalid host: %(reason)s")
+
+
+# Cannot be templated as the error syntax varies.
+# msg needs to be constructed when raised.
+class InvalidParameterValue(Invalid):
+    message = _("%(err)s")
+
+
+class InvalidAuthKey(Invalid):
+    message = _("Invalid auth key: %(reason)s")
+
+
+class InvalidConfigurationValue(Invalid):
+    message = _('Value "%(value)s" is not valid for '
+                'configuration option "%(option)s"')
+
+
+class ServiceUnavailable(Invalid):
+    message = _("Service is unavailable at this time.")
+
+
+class ImageUnacceptable(Invalid):
+    message = _("Image %(image_id)s is unacceptable: %(reason)s")
+
+
+class DeviceUnavailable(Invalid):
+    message = _("The device in the path %(path)s is unavailable: %(reason)s")
+
+
+class InvalidUUID(Invalid):
+    message = _("Expected a uuid but received %(uuid)s.")
+
+
+class InvalidAPIVersionString(Invalid):
+    message = _("API Version String %(version)s is of invalid format. Must "
+                "be of format MajorNum.MinorNum.")
+
+
+class VersionNotFoundForAPIMethod(Invalid):
+    message = _("API version %(version)s is not supported on this method.")
+
+
+class InvalidGlobalAPIVersion(Invalid):
+    message = _("Version %(req_ver)s is not supported by the API. Minimum "
+                "is %(min_ver)s and maximum is %(max_ver)s.")
+
+
+class APIException(WaterfallException):
+    message = _("Error while requesting %(service)s API.")
+
+    def __init__(self, message=None, **kwargs):
+        if 'service' not in kwargs:
+            kwargs['service'] = 'unknown'
+        super(APIException, self).__init__(message, **kwargs)
+
+
+class APITimeout(APIException):
+    message = _("Timeout while requesting %(service)s API.")
+
+
+class RPCTimeout(WaterfallException):
+    message = _("Timeout while requesting capabilities from backend "
+                "%(service)s.")
+    code = 502
+
+
+class NotFound(WaterfallException):
+    message = _("Resource could not be found.")
+    code = 404
+    safe = True
+
+
+class WorkflowNotFound(NotFound):
+    message = _("Workflow %(workflow_id)s could not be found.")
+
+
+class WorkflowAttachmentNotFound(NotFound):
+    message = _("Workflow attachment could not be found with "
+                "filter: %(filter)s .")
+
+
+class WorkflowMetadataNotFound(NotFound):
+    message = _("Workflow %(workflow_id)s has no metadata with "
+                "key %(metadata_key)s.")
+
+
+class WorkflowAdminMetadataNotFound(NotFound):
+    message = _("Workflow %(workflow_id)s has no administration metadata with "
+                "key %(metadata_key)s.")
+
+
+class InvalidWorkflowMetadata(Invalid):
+    message = _("Invalid metadata: %(reason)s")
+
+
+class InvalidWorkflowMetadataSize(Invalid):
+    message = _("Invalid metadata size: %(reason)s")
+
+
+class SnapshotMetadataNotFound(NotFound):
+    message = _("Snapshot %(snapshot_id)s has no metadata with "
+                "key %(metadata_key)s.")
+
+
+class WorkflowTypeNotFound(NotFound):
+    message = _("Workflow type %(workflow_type_id)s could not be found.")
+
+
+class WorkflowTypeNotFoundByName(WorkflowTypeNotFound):
+    message = _("Workflow type with name %(workflow_type_name)s "
+                "could not be found.")
+
+
+class WorkflowTypeAccessNotFound(NotFound):
+    message = _("Workflow type access not found for %(workflow_type_id)s / "
+                "%(project_id)s combination.")
+
+
+class WorkflowTypeExtraSpecsNotFound(NotFound):
+    message = _("Workflow Type %(workflow_type_id)s has no extra specs with "
+                "key %(extra_specs_key)s.")
+
+
+class WorkflowTypeInUse(WaterfallException):
+    message = _("Workflow Type %(workflow_type_id)s deletion is not allowed with "
+                "workflows present with the type.")
+
+
+class SnapshotNotFound(NotFound):
+    message = _("Snapshot %(snapshot_id)s could not be found.")
+
+
+class ServerNotFound(NotFound):
+    message = _("Instance %(uuid)s could not be found.")
+
+
+class WorkflowIsBusy(WaterfallException):
+    message = _("deleting workflow %(workflow_name)s that has snapshot")
+
+
+class SnapshotIsBusy(WaterfallException):
+    message = _("deleting snapshot %(snapshot_name)s that has "
+                "dependent workflows")
+
+
+class ISCSITargetNotFoundForWorkflow(NotFound):
+    message = _("No target id found for workflow %(workflow_id)s.")
+
+
+class InvalidImageRef(Invalid):
+    message = _("Invalid image href %(image_href)s.")
+
+
+class ImageNotFound(NotFound):
+    message = _("Image %(image_id)s could not be found.")
+
+
+class ServiceNotFound(NotFound):
+
+    def __init__(self, message=None, **kwargs):
+        if kwargs.get('host', None):
+            self.message = _("Service %(service_id)s could not be "
+                             "found on host %(host)s.")
+        else:
+            self.message = _("Service %(service_id)s could not be found.")
+        super(ServiceNotFound, self).__init__(None, **kwargs)
+
+
+class ServiceTooOld(Invalid):
+    message = _("Service is too old to fulfil this request.")
+
+
+class HostNotFound(NotFound):
+    message = _("Host %(host)s could not be found.")
+
+
+class SchedulerHostFilterNotFound(NotFound):
+    message = _("Scheduler Host Filter %(filter_name)s could not be found.")
+
+
+class SchedulerHostWeigherNotFound(NotFound):
+    message = _("Scheduler Host Weigher %(weigher_name)s could not be found.")
+
+
+class InvalidReservationExpiration(Invalid):
+    message = _("Invalid reservation expiration %(expire)s.")
+
+
+class InvalidQuotaValue(Invalid):
+    message = _("Change would make usage less than 0 for the following "
+                "resources: %(unders)s")
+
+
+class InvalidNestedQuotaSetup(WaterfallException):
+    message = _("Project quotas are not properly setup for nested quotas: "
+                "%(reason)s.")
+
+
+class QuotaNotFound(NotFound):
+    message = _("Quota could not be found")
+
+
+class QuotaResourceUnknown(QuotaNotFound):
+    message = _("Unknown quota resources %(unknown)s.")
+
+
+class ProjectQuotaNotFound(QuotaNotFound):
+    message = _("Quota for project %(project_id)s could not be found.")
+
+
+class QuotaClassNotFound(QuotaNotFound):
+    message = _("Quota class %(class_name)s could not be found.")
+
+
+class QuotaUsageNotFound(QuotaNotFound):
+    message = _("Quota usage for project %(project_id)s could not be found.")
+
+
+class ReservationNotFound(QuotaNotFound):
+    message = _("Quota reservation %(uuid)s could not be found.")
+
+
+class OverQuota(WaterfallException):
+    message = _("Quota exceeded for resources: %(overs)s")
+
+
+class FileNotFound(NotFound):
+    message = _("File %(file_path)s could not be found.")
+
+
+class Duplicate(WaterfallException):
     pass
 
 
-class EC2IncorrectStateException(EC2Exception):
+class WorkflowTypeExists(Duplicate):
+    message = _("Workflow Type %(id)s already exists.")
+
+
+class WorkflowTypeAccessExists(Duplicate):
+    message = _("Workflow type access for %(workflow_type_id)s / "
+                "%(project_id)s combination already exists.")
+
+
+class WorkflowTypeEncryptionExists(Invalid):
+    message = _("Workflow type encryption for type %(type_id)s already exists.")
+
+
+class WorkflowTypeEncryptionNotFound(NotFound):
+    message = _("Workflow type encryption for type %(type_id)s does not exist.")
+
+
+class MalformedRequestBody(WaterfallException):
+    message = _("Malformed message body: %(reason)s")
+
+
+class ConfigNotFound(NotFound):
+    message = _("Could not find config at %(path)s")
+
+
+class ParameterNotFound(NotFound):
+    message = _("Could not find parameter %(param)s")
+
+
+class PasteAppNotFound(NotFound):
+    message = _("Could not load paste app '%(name)s' from %(path)s")
+
+
+class NoValidHost(WaterfallException):
+    message = _("No valid host was found. %(reason)s")
+
+
+class NoMoreTargets(WaterfallException):
+    """No more available targets."""
     pass
 
 
-class EC2DuplicateException(EC2InvalidException):
-    pass
+class QuotaError(WaterfallException):
+    message = _("Quota exceeded: code=%(code)s")
+    code = 413
+    headers = {'Retry-After': '0'}
+    safe = True
 
 
-class EC2InUseException(EC2InvalidException):
-    pass
+class WorkflowSizeExceedsAvailableQuota(QuotaError):
+    message = _("Requested workflow or snapshot exceeds allowed %(name)s "
+                "quota. Requested %(requested)sG, quota is %(quota)sG and "
+                "%(consumed)sG has been consumed.")
+
+    def __init__(self, message=None, **kwargs):
+        kwargs.setdefault('name', 'gigabytes')
+        super(WorkflowSizeExceedsAvailableQuota, self).__init__(
+            message, **kwargs)
 
 
-class EC2NotFoundException(EC2InvalidException):
-    pass
+class WorkflowSizeExceedsLimit(QuotaError):
+    message = _("Requested workflow size %(size)d is larger than "
+                "maximum allowed limit %(limit)d.")
 
 
-class EC2OverlimitException(EC2Exception):
-    pass
+class WorkflowBackupSizeExceedsAvailableQuota(QuotaError):
+    message = _("Requested backup exceeds allowed Backup gigabytes "
+                "quota. Requested %(requested)sG, quota is %(quota)sG and "
+                "%(consumed)sG has been consumed.")
 
 
-# AWS compliant exceptions
+class WorkflowLimitExceeded(QuotaError):
+    message = _("Maximum number of workflows allowed (%(allowed)d) exceeded for "
+                "quota '%(name)s'.")
 
-class Unsupported(EC2Exception):
-    msg_fmt = _("The specified request is unsupported. %(reason)s")
-
-
-class UnsupportedOperation(EC2Exception):
-    msg_fmt = _('The specified request includes an unsupported operation.')
-
-
-class OperationNotPermitted(EC2Exception):
-    msg_fmt = _('The specified operation is not allowed.')
+    def __init__(self, message=None, **kwargs):
+        kwargs.setdefault('name', 'workflows')
+        super(WorkflowLimitExceeded, self).__init__(message, **kwargs)
 
 
-class InvalidRequest(EC2InvalidException):
-    msg_fmt = _('The request received was invalid.')
+class SnapshotLimitExceeded(QuotaError):
+    message = _("Maximum number of snapshots allowed (%(allowed)d) exceeded")
 
 
-class InvalidAttribute(EC2InvalidException):
-    msg_fmt = _("Attribute not supported: %(attr)s")
+class BackupLimitExceeded(QuotaError):
+    message = _("Maximum number of backups allowed (%(allowed)d) exceeded")
 
 
-class InvalidID(EC2InvalidException):
-    msg_fmt = _("The ID '%(id)s' is not valid")
+class DuplicateSfWorkflowNames(Duplicate):
+    message = _("Detected more than one workflow with name %(vol_name)s")
 
 
-class InvalidInput(EC2InvalidException):
-    msg_fmt = _("Invalid input received: %(reason)s")
+class WorkflowTypeCreateFailed(WaterfallException):
+    message = _("Cannot create workflow_type with "
+                "name %(name)s and specs %(extra_specs)s")
 
 
-class AuthFailure(EC2InvalidException):
-    msg_fmt = _('Not authorized.')
+class WorkflowTypeUpdateFailed(WaterfallException):
+    message = _("Cannot update workflow_type %(id)s")
 
 
-class ValidationError(EC2InvalidException):
-    msg_fmt = _("The input fails to satisfy the constraints "
-                "specified by an AWS service: '%(reason)s'")
+class UnknownCmd(WorkflowDriverException):
+    message = _("Unknown or unsupported command %(cmd)s")
 
 
-class MissingParameter(EC2InvalidException):
-    msg_fmt = _("The required parameter '%(param)s' is missing")
+class MalformedResponse(WorkflowDriverException):
+    message = _("Malformed response to command %(cmd)s: %(reason)s")
 
 
-class InvalidParameter(EC2InvalidException):
-    msg_fmt = _("The property '%(name)s' is not valid")
+class FailedCmdWithDump(WorkflowDriverException):
+    message = _("Operation failed with status=%(status)s. Full dump: %(data)s")
 
 
-class InvalidParameterValue(EC2InvalidException):
-    msg_fmt = _("Value (%(value)s) for parameter %(parameter)s is invalid. "
+class InvalidConnectorException(WorkflowDriverException):
+    message = _("Connector doesn't have required information: %(missing)s")
+
+
+class GlanceMetadataExists(Invalid):
+    message = _("Glance metadata cannot be updated, key %(key)s"
+                " exists for workflow id %(workflow_id)s")
+
+
+class GlanceMetadataNotFound(NotFound):
+    message = _("Glance metadata for workflow/snapshot %(id)s cannot be found.")
+
+
+class ExportFailure(Invalid):
+    message = _("Failed to export for workflow: %(reason)s")
+
+
+class RemoveExportException(WorkflowDriverException):
+    message = _("Failed to remove export for workflow %(workflow)s: %(reason)s")
+
+
+class MetadataCreateFailure(Invalid):
+    message = _("Failed to create metadata for workflow: %(reason)s")
+
+
+class MetadataUpdateFailure(Invalid):
+    message = _("Failed to update metadata for workflow: %(reason)s")
+
+
+class MetadataCopyFailure(Invalid):
+    message = _("Failed to copy metadata to workflow: %(reason)s")
+
+
+class InvalidMetadataType(Invalid):
+    message = _("The type of metadata: %(metadata_type)s for workflow/snapshot "
+                "%(id)s is invalid.")
+
+
+class ImageCopyFailure(Invalid):
+    message = _("Failed to copy image to workflow: %(reason)s")
+
+
+class BackupInvalidCephArgs(BackupDriverException):
+    message = _("Invalid Ceph args provided for backup rbd operation")
+
+
+class BackupOperationError(Invalid):
+    message = _("An error has occurred during backup operation")
+
+
+class BackupMetadataUnsupportedVersion(BackupDriverException):
+    message = _("Unsupported backup metadata version requested")
+
+
+class BackupVerifyUnsupportedDriver(BackupDriverException):
+    message = _("Unsupported backup verify driver")
+
+
+class WorkflowMetadataBackupExists(BackupDriverException):
+    message = _("Metadata backup already exists for this workflow")
+
+
+class BackupRBDOperationFailed(BackupDriverException):
+    message = _("Backup RBD operation failed")
+
+
+class EncryptedBackupOperationFailed(BackupDriverException):
+    message = _("Backup operation of an encrypted workflow failed.")
+
+
+class BackupNotFound(NotFound):
+    message = _("Backup %(backup_id)s could not be found.")
+
+
+class BackupFailedToGetWorkflowBackend(NotFound):
+    message = _("Failed to identify workflow backend.")
+
+
+class InvalidBackup(Invalid):
+    message = _("Invalid backup: %(reason)s")
+
+
+class SwiftConnectionFailed(BackupDriverException):
+    message = _("Connection to swift failed: %(reason)s")
+
+
+class TransferNotFound(NotFound):
+    message = _("Transfer %(transfer_id)s could not be found.")
+
+
+class WorkflowMigrationFailed(WaterfallException):
+    message = _("Workflow migration failed: %(reason)s")
+
+
+class SSHInjectionThreat(WaterfallException):
+    message = _("SSH command injection detected: %(command)s")
+
+
+class QoSSpecsExists(Duplicate):
+    message = _("QoS Specs %(specs_id)s already exists.")
+
+
+class QoSSpecsCreateFailed(WaterfallException):
+    message = _("Failed to create qos_specs: "
+                "%(name)s with specs %(qos_specs)s.")
+
+
+class QoSSpecsUpdateFailed(WaterfallException):
+    message = _("Failed to update qos_specs: "
+                "%(specs_id)s with specs %(qos_specs)s.")
+
+
+class QoSSpecsNotFound(NotFound):
+    message = _("No such QoS spec %(specs_id)s.")
+
+
+class QoSSpecsAssociateFailed(WaterfallException):
+    message = _("Failed to associate qos_specs: "
+                "%(specs_id)s with type %(type_id)s.")
+
+
+class QoSSpecsDisassociateFailed(WaterfallException):
+    message = _("Failed to disassociate qos_specs: "
+                "%(specs_id)s with type %(type_id)s.")
+
+
+class QoSSpecsKeyNotFound(NotFound):
+    message = _("QoS spec %(specs_id)s has no spec with "
+                "key %(specs_key)s.")
+
+
+class InvalidQoSSpecs(Invalid):
+    message = _("Invalid qos specs: %(reason)s")
+
+
+class QoSSpecsInUse(WaterfallException):
+    message = _("QoS Specs %(specs_id)s is still associated with entities.")
+
+
+class KeyManagerError(WaterfallException):
+    message = _("key manager error: %(reason)s")
+
+
+class ManageExistingInvalidReference(WaterfallException):
+    message = _("Manage existing workflow failed due to invalid backend "
+                "reference %(existing_ref)s: %(reason)s")
+
+
+class ManageExistingAlreadyManaged(WaterfallException):
+    message = _("Unable to manage existing workflow. "
+                "Workflow %(workflow_ref)s already managed.")
+
+
+class InvalidReplicationTarget(Invalid):
+    message = _("Invalid Replication Target: %(reason)s")
+
+
+class UnableToFailOver(WaterfallException):
+    message = _("Unable to failover to replication target:"
+                "%(reason)s).")
+
+
+class ReplicationError(WaterfallException):
+    message = _("Workflow %(workflow_id)s replication "
+                "error: %(reason)s")
+
+
+class ReplicationNotFound(NotFound):
+    message = _("Workflow replication for %(workflow_id)s "
+                "could not be found.")
+
+
+class ManageExistingWorkflowTypeMismatch(WaterfallException):
+    message = _("Manage existing workflow failed due to workflow type mismatch: "
                 "%(reason)s")
 
 
-class InvalidFilter(EC2InvalidException):
-    msg_fmt = _('The filter is invalid.')
+class ExtendWorkflowError(WaterfallException):
+    message = _("Error extending workflow: %(reason)s")
 
 
-class InvalidParameterCombination(EC2InvalidException):
-    msg_fmt = _('The combination of parameters in incorrect')
+class EvaluatorParseException(Exception):
+    message = _("Error during evaluator parsing: %(reason)s")
 
 
-class InvalidVpcRange(EC2InvalidException):
-    ec2_code = 'InvalidVpc.Range'
-    msg_fmt = _("The CIDR '%(cidr_block)s' is invalid.")
+class LockCreationFailed(WaterfallException):
+    message = _('Unable to create lock. Coordination backend not started.')
 
 
-class InvalidVpcState(EC2InvalidException):
-    msg_fmt = _('VPC %(vpc_id)s is currently attached to '
-                'the Virtual Private Gateway %(vgw_id)s')
+class LockingFailed(WaterfallException):
+    message = _('Lock acquisition failed.')
 
 
-class InvalidSubnetRange(EC2InvalidException):
-    ec2_code = 'InvalidSubnet.Range'
-    msg_fmt = _("The CIDR '%(cidr_block)s' is invalid.")
+UnsupportedObjectError = obj_exc.UnsupportedObjectError
+OrphanedObjectError = obj_exc.OrphanedObjectError
+IncompatibleObjectVersion = obj_exc.IncompatibleObjectVersion
+ReadOnlyFieldError = obj_exc.ReadOnlyFieldError
+ObjectActionError = obj_exc.ObjectActionError
+ObjectFieldInvalid = obj_exc.ObjectFieldInvalid
 
 
-class InvalidSubnetConflict(EC2InvalidException):
-    ec2_code = 'InvalidSubnet.Conflict'
-    msg_fmt = _("The CIDR '%(cidr_block)s' conflicts with another subnet")
+class CappedVersionUnknown(WaterfallException):
+    message = _('Unrecoverable Error: Versioned Objects in DB are capped to '
+                'unknown version %(version)s.')
 
 
-class InvalidInstanceId(EC2InvalidException):
-    ec2_code = 'InvalidInstanceID'
-    msg_fmt = _("There are multiple interfaces attached to instance "
-                "'%(instance_id)s'. Please specify an interface ID for "
-                "the operation instead.")
+class WorkflowGroupNotFound(WaterfallException):
+    message = _('Unable to find Workflow Group: %(vg_name)s')
 
 
-class InvalidSnapshotIDMalformed(EC2InvalidException):
-    ec2_code = 'InvalidSnapshotID.Malformed'
-    # TODO(ft): Change the message with the real AWS message
-    msg_fmg = _('The snapshot %(id)s ID is not valid')
+class WorkflowGroupCreationFailed(WaterfallException):
+    message = _('Failed to create Workflow Group: %(vg_name)s')
 
 
-class InvalidBlockDeviceMapping(EC2InvalidException):
-    pass
+class WorkflowDeviceNotFound(WaterfallException):
+    message = _('Workflow device not found at %(device)s.')
 
 
-class IncorrectState(EC2IncorrectStateException):
-    msg_fmt = _("The resource is in incorrect state for the request - reason: "
-                "'%(reason)s'")
+# Driver specific exceptions
+# Pure Storage
+class PureDriverException(WorkflowDriverException):
+    message = _("Pure Storage Waterfall driver failure: %(reason)s")
 
 
-class DependencyViolation(EC2IncorrectStateException):
-    msg_fmt = _('Object %(obj1_id)s has dependent resource %(obj2_id)s')
+# SolidFire
+class SolidFireAPIException(WorkflowBackendAPIException):
+    message = _("Bad response from SolidFire API")
 
 
-class CannotDelete(EC2IncorrectStateException):
-    msg_fmt = _('Cannot delete the default VPC security group')
+class SolidFireDriverException(WorkflowDriverException):
+    message = _("SolidFire Waterfall Driver exception")
 
 
-class ResourceAlreadyAssociated(EC2IncorrectStateException):
-    ec2_code = 'Resource.AlreadyAssociated'
+class SolidFireAPIDataException(SolidFireAPIException):
+    message = _("Error in SolidFire API response: data=%(data)s")
 
 
-class GatewayNotAttached(EC2IncorrectStateException):
-    ec2_code = 'Gateway.NotAttached'
-    msg_fmt = _("resource %(gw_id)s is not attached to network %(vpc_id)s")
+class SolidFireAccountNotFound(SolidFireDriverException):
+    message = _("Unable to locate account %(account_name)s on "
+                "Solidfire device")
 
 
-class IncorrectInstanceState(EC2IncorrectStateException):
-    msg_fmt = _("The instance '%(instance_id)s' is not in a state from which "
-                "the requested operation can be performed.")
+class SolidFireRetryableException(WorkflowBackendAPIException):
+    message = _("Retryable SolidFire Exception encountered")
 
 
-class InvalidAMIIDUnavailable(EC2IncorrectStateException):
-    ec2_code = 'InvalidAMIID.Unavailable'
-    # TODO(ft): Change the message with the real AWS message
-    msg_fmt = _("Image %(image_id)s is not active.")
+# HP 3Par
+class Invalid3PARDomain(WorkflowDriverException):
+    message = _("Invalid 3PAR Domain: %(err)s")
 
 
-class InvalidNetworkInterfaceInUse(EC2InUseException):
-    ec2_code = 'InvalidNetworkInterface.InUse'
-    msg_fmt = _('Interface: %(interface_ids)s in use.')
+# RemoteFS drivers
+class RemoteFSException(WorkflowDriverException):
+    message = _("Unknown RemoteFS exception")
 
 
-class InvalidIPAddressInUse(EC2InUseException):
-    ec2_code = 'InvalidIPAddress.InUse'
-    msg_fmt = _('Address %(ip_address)s is in use.')
+class RemoteFSConcurrentRequest(RemoteFSException):
+    message = _("A concurrent, possibly contradictory, request "
+                "has been made.")
 
 
-class InvalidKeyPairDuplicate(EC2DuplicateException):
-    ec2_code = 'InvalidKeyPair.Duplicate'
-    msg_fmt = _("Key pair '%(key_name)s' already exists.")
+class RemoteFSNoSharesMounted(RemoteFSException):
+    message = _("No mounted shares found")
 
 
-class InvalidPermissionDuplicate(EC2DuplicateException):
-    ec2_code = 'InvalidPermission.Duplicate'
-    msg_fmt = _('The specified rule already exists for that security group.')
+class RemoteFSNoSuitableShareFound(RemoteFSException):
+    message = _("There is no share which can host %(workflow_size)sG")
 
 
-class InvalidGroupDuplicate(EC2DuplicateException):
-    ec2_code = 'InvalidGroup.Duplicate'
-    msg_fmt = _("Security group '%(name)s' already exists.")
+# NFS driver
+class NfsException(RemoteFSException):
+    message = _("Unknown NFS exception")
 
 
-class RouteAlreadyExists(EC2DuplicateException):
-    msg_fmt = _('The route identified by %(destination_cidr_block)s '
-                'already exists.')
+class NfsNoSharesMounted(RemoteFSNoSharesMounted):
+    message = _("No mounted NFS shares found")
 
 
-class InvalidCustomerGatewayDuplicateIpAddress(EC2DuplicateException):
-    ec2_code = 'InvalidCustomerGateway.DuplicateIpAddress'
-    msg_fmt = _('Conflict among chosen gateway IP addresses.')
+class NfsNoSuitableShareFound(RemoteFSNoSuitableShareFound):
+    message = _("There is no share which can host %(workflow_size)sG")
 
 
-class InvalidVpcIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidVpcID.NotFound'
-    msg_fmt = _("The vpc ID '%(id)s' does not exist")
+# Smbfs driver
+class SmbfsException(RemoteFSException):
+    message = _("Unknown SMBFS exception.")
 
 
-class InvalidInternetGatewayIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidInternetGatewayID.NotFound'
-    msg_fmt = _("The internetGateway ID '%(id)s' does not exist")
+class SmbfsNoSharesMounted(RemoteFSNoSharesMounted):
+    message = _("No mounted SMBFS shares found.")
 
 
-class InvalidSubnetIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidSubnetID.NotFound'
-    msg_fmt = _("The subnet ID '%(id)s' does not exist")
+class SmbfsNoSuitableShareFound(RemoteFSNoSuitableShareFound):
+    message = _("There is no share which can host %(workflow_size)sG.")
 
 
-class InvalidNetworkInterfaceIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidNetworkInterfaceID.NotFound'
-    msg_fmt = _("Network interface %(id)s could not "
-                "be found.")
+# Gluster driver
+class GlusterfsException(RemoteFSException):
+    message = _("Unknown Gluster exception")
 
 
-class InvalidAttachmentIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidAttachmentID.NotFound'
-    msg_fmt = _("Attachment %(id)s could not "
-                "be found.")
+class GlusterfsNoSharesMounted(RemoteFSNoSharesMounted):
+    message = _("No mounted Gluster shares found")
 
 
-class InvalidInstanceIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidInstanceID.NotFound'
-    msg_fmt = _("The instance ID '%(id)s' does not exist")
+class GlusterfsNoSuitableShareFound(RemoteFSNoSuitableShareFound):
+    message = _("There is no share which can host %(workflow_size)sG")
 
 
-class InvalidDhcpOptionsIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidDhcpOptionsID.NotFound'
-    msg_fmt = _("The dhcp options ID '%(id)s' does not exist")
+# Virtuozzo Storage Driver
 
+class VzStorageException(RemoteFSException):
+    message = _("Unknown Virtuozzo Storage exception")
 
-class InvalidAddressNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidAddress.NotFound'
-    msg_fmt = _('The specified elastic IP address %(ip)s cannot be found.')
 
+class VzStorageNoSharesMounted(RemoteFSNoSharesMounted):
+    message = _("No mounted Virtuozzo Storage shares found")
 
-class InvalidAllocationIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidAllocationID.NotFound'
-    msg_fmt = _("The allocation ID '%(id)s' does not exist")
 
+class VzStorageNoSuitableShareFound(RemoteFSNoSuitableShareFound):
+    message = _("There is no share which can host %(workflow_size)sG")
 
-class InvalidAssociationIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidAssociationID.NotFound'
-    msg_fmt = _("The association ID '%(id)s' does not exist")
 
+# Fibre Channel Zone Manager
+class ZoneManagerException(WaterfallException):
+    message = _("Fibre Channel connection control failure: %(reason)s")
 
-class InvalidSecurityGroupIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidSecurityGroupID.NotFound'
-    msg_fmt = _("The securityGroup ID '%(id)s' does not exist")
 
+class FCZoneDriverException(WaterfallException):
+    message = _("Fibre Channel Zone operation failed: %(reason)s")
 
-class InvalidGroupNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidGroup.NotFound'
-    msg_fmg = _("The security group ID '%(id)s' does not exist")
 
+class FCSanLookupServiceException(WaterfallException):
+    message = _("Fibre Channel SAN Lookup failure: %(reason)s")
 
-class InvalidPermissionNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidPermission.NotFound'
-    msg_fmg = _('The specified permission does not exist')
 
+class BrocadeZoningCliException(WaterfallException):
+    message = _("Brocade Fibre Channel Zoning CLI error: %(reason)s")
 
-class InvalidRouteTableIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidRouteTableID.NotFound'
-    msg_fmt = _("The routeTable ID '%(id)s' does not exist")
 
+class BrocadeZoningHttpException(WaterfallException):
+    message = _("Brocade Fibre Channel Zoning HTTP error: %(reason)s")
 
-class InvalidRouteNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidRoute.NotFound'
-    msg_fmt = _('No route with destination-cidr-block '
-                '%(destination_cidr_block)s in route table %(route_table_id)s')
 
+class CiscoZoningCliException(WaterfallException):
+    message = _("Cisco Fibre Channel Zoning CLI error: %(reason)s")
 
-class InvalidAMIIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidAMIID.NotFound'
-    msg_fmt = _("The image id '[%(id)s]' does not exist")
 
+class NetAppDriverException(WorkflowDriverException):
+    message = _("NetApp Waterfall Driver exception.")
 
-class InvalidVolumeNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidVolume.NotFound'
-    msg_fmt = _("The volume '%(id)s' does not exist.")
 
+class EMCVnxCLICmdError(WorkflowBackendAPIException):
+    message = _("EMC VNX Waterfall Driver CLI exception: %(cmd)s "
+                "(Return Code: %(rc)s) (Output: %(out)s).")
 
-class InvalidSnapshotNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidSnapshot.NotFound'
-    msg_fmt = _("Snapshot %(id)s could not be found.")
 
+class EMCSPUnavailableException(EMCVnxCLICmdError):
+    message = _("EMC VNX Waterfall Driver SPUnavailableException: %(cmd)s "
+                "(Return Code: %(rc)s) (Output: %(out)s).")
 
-class InvalidKeypairNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidKeyPair.NotFound'
-    msg_fmt = _("Keypair %(id)s is not found")
 
+# ConsistencyGroup
+class ConsistencyGroupNotFound(NotFound):
+    message = _("ConsistencyGroup %(consistencygroup_id)s could not be found.")
 
-class InvalidAvailabilityZoneNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidAvailabilityZone.NotFound'
-    msg_fmt = _("Availability zone %(id)s not found")
 
+class InvalidConsistencyGroup(Invalid):
+    message = _("Invalid ConsistencyGroup: %(reason)s")
 
-class InvalidGatewayIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidGatewayID.NotFound'
-    msg_fmt = _("The gateway ID '%(id)s' does not exist")
 
+# CgSnapshot
+class CgSnapshotNotFound(NotFound):
+    message = _("CgSnapshot %(cgsnapshot_id)s could not be found.")
 
-class InvalidVpnGatewayIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidVpnGatewayID.NotFound'
-    msg_fmt = _("The vpnGateway ID '%(id)s' does not exist")
 
+class InvalidCgSnapshot(Invalid):
+    message = _("Invalid CgSnapshot: %(reason)s")
 
-class InvalidCustomerGatewayIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidCustomerGatewayID.NotFound'
-    msg_fmt = _("The customerGateway ID '%(id)s' does not exist")
 
+# Hitachi Block Storage Driver
+class HBSDError(WaterfallException):
+    message = _("HBSD error occurs.")
 
-class InvalidVpnConnectionIDNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidVpnConnectionID.NotFound'
-    msg_fmt = _("The vpnConnection ID '%(id)s' does not exist")
 
+class HBSDCmdError(HBSDError):
 
-class InvalidVpnGatewayAttachmentNotFound(EC2NotFoundException):
-    ec2_code = 'InvalidVpnGatewayAttachment.NotFound'
-    msg_fmt = _("The attachment with vpn gateway ID '%(vgw_id)s' "
-                "and vpc ID '%(vpc_id)s' does not exist")
+    def __init__(self, message=None, ret=None, err=None):
+        self.ret = ret
+        self.stderr = err
 
+        super(HBSDCmdError, self).__init__(message=message)
 
-class ResourceLimitExceeded(EC2OverlimitException):
-    msg_fmt = _('You have reached the limit of %(resource)s')
 
+class HBSDBusy(HBSDError):
+    message = "Device or resource is busy."
 
-class VpcLimitExceeded(EC2OverlimitException):
-    msg_fmt = _('The maximum number of VPCs has been reached.')
 
+class HBSDNotFound(NotFound):
+    message = _("Storage resource could not be found.")
 
-class SubnetLimitExceeded(EC2OverlimitException):
-    msg_fmt = _('You have reached the limit on the number of subnets that you '
-                'can create')
 
+class HBSDWorkflowIsBusy(WorkflowIsBusy):
+    message = _("Workflow %(workflow_name)s is busy.")
 
-class InsufficientFreeAddressesInSubnet(EC2OverlimitException):
-    msg_fmt = _('The specified subnet does not have enough free addresses to '
-                'satisfy the request.')
 
+# Datera driver
+class DateraAPIException(WorkflowBackendAPIException):
+    message = _("Bad response from Datera API")
 
-class AddressLimitExceeded(EC2OverlimitException):
-    msg_fmt = _('The maximum number of addresses has been reached.')
 
+# Target drivers
+class ISCSITargetCreateFailed(WaterfallException):
+    message = _("Failed to create iscsi target for workflow %(workflow_id)s.")
 
-class SecurityGroupLimitExceeded(EC2OverlimitException):
-    msg_fmt = _('You have reached the limit of security groups')
 
+class ISCSITargetRemoveFailed(WaterfallException):
+    message = _("Failed to remove iscsi target for workflow %(workflow_id)s.")
 
-class RulesPerSecurityGroupLimitExceeded(EC2OverlimitException):
-    msg_fmt = _("You've reached the limit on the number of rules that "
-                "you can add to a security group.")
 
+class ISCSITargetAttachFailed(WaterfallException):
+    message = _("Failed to attach iSCSI target for workflow %(workflow_id)s.")
 
-class VpnGatewayAttachmentLimitExceeded(EC2OverlimitException):
-    msg_fmt = _('The maximum number of virtual private gateway attachments '
-                'has been reached.')
 
+class ISCSITargetDetachFailed(WaterfallException):
+    message = _("Failed to detach iSCSI target for workflow %(workflow_id)s.")
 
-class InvalidGroupReserved(EC2InvalidException):
-    ec2_code = 'InvalidGroup.Reserved'
-    msg_fmt = _("The security group '%(group_name)' is reserved.")
+
+class ISCSITargetHelperCommandFailed(WaterfallException):
+    message = _("%(error_message)s")
+
+
+# X-IO driver exception.
+class XIODriverException(WorkflowDriverException):
+    message = _("X-IO Workflow Driver exception!")
+
+
+# Violin Memory drivers
+class ViolinInvalidBackendConfig(WaterfallException):
+    message = _("Workflow backend config is invalid: %(reason)s")
+
+
+class ViolinRequestRetryTimeout(WaterfallException):
+    message = _("Backend service retry timeout hit: %(timeout)s sec")
+
+
+class ViolinBackendErr(WaterfallException):
+    message = _("Backend reports: %(message)s")
+
+
+class ViolinBackendErrExists(WaterfallException):
+    message = _("Backend reports: item already exists")
+
+
+class ViolinBackendErrNotFound(WaterfallException):
+    message = _("Backend reports: item not found")
+
+
+# ZFSSA NFS driver exception.
+class WebDAVClientError(WaterfallException):
+    message = _("The WebDAV request failed. Reason: %(msg)s, "
+                "Return code/reason: %(code)s, Source Workflow: %(src)s, "
+                "Destination Workflow: %(dst)s, Method: %(method)s.")
+
+
+# XtremIO Drivers
+class XtremIOAlreadyMappedError(WaterfallException):
+    message = _("Workflow to Initiator Group mapping already exists")
+
+
+class XtremIOArrayBusy(WaterfallException):
+    message = _("System is busy, retry operation.")
+
+
+class XtremIOSnapshotsLimitExceeded(WaterfallException):
+    message = _("Exceeded the limit of snapshots per workflow")
+
+
+# Infortrend EonStor DS Driver
+class InfortrendCliException(WaterfallException):
+    message = _("Infortrend CLI exception: %(err)s Param: %(param)s "
+                "(Return Code: %(rc)s) (Output: %(out)s)")
+
+
+# DOTHILL drivers
+class DotHillInvalidBackend(WaterfallException):
+    message = _("Backend doesn't exist (%(backend)s)")
+
+
+class DotHillConnectionError(WaterfallException):
+    message = _("%(message)s")
+
+
+class DotHillAuthenticationError(WaterfallException):
+    message = _("%(message)s")
+
+
+class DotHillNotEnoughSpace(WaterfallException):
+    message = _("Not enough space on backend (%(backend)s)")
+
+
+class DotHillRequestError(WaterfallException):
+    message = _("%(message)s")
+
+
+class DotHillNotTargetPortal(WaterfallException):
+    message = _("No active iSCSI portals with supplied iSCSI IPs")
+
+
+# Sheepdog
+class SheepdogError(WorkflowBackendAPIException):
+    message = _("An error has occured in SheepdogDriver. (Reason: %(reason)s)")
+
+
+class SheepdogCmdError(SheepdogError):
+    message = _("(Command: %(cmd)s) "
+                "(Return Code: %(exit_code)s) "
+                "(Stdout: %(stdout)s) "
+                "(Stderr: %(stderr)s)")
+
+
+class MetadataAbsent(WaterfallException):
+    message = _("There is no metadata in DB object.")
+
+
+class NotSupportedOperation(Invalid):
+    message = _("Operation not supported: %(operation)s.")
+    code = 405
+
+
+# Hitachi HNAS drivers
+class HNASConnError(WaterfallException):
+    message = _("%(message)s")
+
+
+# Coho drivers
+class CohoException(WorkflowDriverException):
+    message = _("Coho Data Waterfall driver failure: %(message)s")
+
+
+# Tegile Storage drivers
+class TegileAPIException(WorkflowBackendAPIException):
+    message = _("Unexpected response from Tegile IntelliFlash API")
+
+
+# NexentaStor driver exception
+class NexentaException(WorkflowDriverException):
+    message = _("%(message)s")
+
+
+# Google Cloud Storage(GCS) backup driver
+class GCSConnectionFailure(BackupDriverException):
+    message = _("Google Cloud Storage connection failure: %(reason)s")
+
+
+class GCSApiFailure(BackupDriverException):
+    message = _("Google Cloud Storage api failure: %(reason)s")
+
+
+class GCSOAuth2Failure(BackupDriverException):
+    message = _("Google Cloud Storage oauth2 failure: %(reason)s")
