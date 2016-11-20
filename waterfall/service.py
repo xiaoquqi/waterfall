@@ -64,7 +64,7 @@ service_opts = [
                default="0.0.0.0",
                help='IP address on which OpenStack Workflow API listens'),
     cfg.PortOpt('osapi_workflow_listen_port',
-                default=8776,
+                default=8888,
                 help='Port on which OpenStack Workflow API listens'),
     cfg.IntOpt('osapi_workflow_workers',
                help='Number of workers for OpenStack Workflow API service. '

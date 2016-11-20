@@ -288,3 +288,7 @@ def model_query(context, *args, **kwargs):
 ###################
 
 
+#@require_admin_context
+def workflow_get_all(context, filters=None):
+    query = model_query(context, models.Workflow)
+    return query.all()

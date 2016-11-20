@@ -24,11 +24,13 @@ oslo.utils>=3.5.0 # Apache-2.0
 oslo.versionedobjects>=1.5.0 # Apache-2.0
 Routes>=1.12.3,!=2.0,!=2.1,!=2.3.0;python_version=='2.7'  # MIT
 Routes>=1.12.3,!=2.0,!=2.3.0;python_version!='2.7'  # MIT
+keystonemiddleware!=4.1.0,>=4.0.0 # Apache-2.0
 
 six>=1.9.0  # MIT
 lxml>=2.3 # BSD
 os-brick!=1.4.0,>=1.0.0 # Apache-2.0
 osprofiler>=1.1.0 # Apache-2.0
+pycrypto>=2.6 # Public Domain
 
 # OpenStack clients
 python-novaclient>=2.29.0,!=2.33.0  # Apache-2.0

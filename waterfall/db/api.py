@@ -140,3 +140,7 @@ class Case(object):
         self.whens = whens
         self.value = value
         self.else_ = else_
+
+def workflow_get_all(context, filters=None):
+    """Get all workflows"""
+    return IMPL.workflow_get_all(context, filters)

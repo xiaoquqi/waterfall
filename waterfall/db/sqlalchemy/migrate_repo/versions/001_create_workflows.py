@@ -13,7 +13,7 @@
 #    under the License.
 
 from sqlalchemy import Column, MetaData
-from sqlalchemy import DateTime, PrimaryKeyConstraint, String, Table, Text
+from sqlalchemy import DateTime, PrimaryKeyConstraint, String, Table, Text, Boolean
 from sqlalchemy import UniqueConstraint
 
 
@@ -25,6 +25,7 @@ def upgrade(migrate_engine):
         Column('created_at', DateTime),
         Column('updated_at', DateTime),
         Column('deleted_at', DateTime),
+        Column('deleted', Boolean),
         Column("id", String(length=30)),
         Column("project_id", String(length=255)),
         Column("user_id", String(length=255)),

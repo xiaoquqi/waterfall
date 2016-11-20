@@ -23,11 +23,6 @@ from oslo_log import log as logging
 
 from waterfall.api import extensions
 import waterfall.api.openstack
-from waterfall.api.v2 import limits
-from waterfall.api.v2 import snapshot_metadata
-from waterfall.api.v2 import snapshots
-from waterfall.api.v2 import types
-from waterfall.api.v2 import workflow_metadata
 from waterfall.api.v2 import workflows
 from waterfall.api import versions
 
@@ -52,48 +47,3 @@ class APIRouter(waterfall.api.openstack.APIRouter):
                         controller=self.resources['workflows'],
                         collection={'detail': 'GET'},
                         member={'action': 'POST'})
-
-        self.resources['types'] = types.create_resource()
-        mapper.resource("type", "types",
-                        controller=self.resources['types'],
-                        member={'action': 'POST'})
-
-        self.resources['snapshots'] = snapshots.create_resource(ext_mgr)
-        mapper.resource("snapshot", "snapshots",
-                        controller=self.resources['snapshots'],
-                        collection={'detail': 'GET'},
-                        member={'action': 'POST'})
-
-        self.resources['limits'] = limits.create_resource()
-        mapper.resource("limit", "limits",
-                        controller=self.resources['limits'])
-
-        self.resources['snapshot_metadata'] = \
-            snapshot_metadata.create_resource()
-        snapshot_metadata_controller = self.resources['snapshot_metadata']
-
-        mapper.resource("snapshot_metadata", "metadata",
-                        controller=snapshot_metadata_controller,
-                        parent_resource=dict(member_name='snapshot',
-                                             collection_name='snapshots'))
-
-        mapper.connect("metadata",
-                       "/{project_id}/snapshots/{snapshot_id}/metadata",
-                       controller=snapshot_metadata_controller,
-                       action='update_all',
-                       conditions={"method": ['PUT']})
-
-        self.resources['workflow_metadata'] = \
-            workflow_metadata.create_resource()
-        workflow_metadata_controller = self.resources['workflow_metadata']
-
-        mapper.resource("workflow_metadata", "metadata",
-                        controller=workflow_metadata_controller,
-                        parent_resource=dict(member_name='workflow',
-                                             collection_name='workflows'))
-
-        mapper.connect("metadata",
-                       "/{project_id}/workflows/{workflow_id}/metadata",
-                       controller=workflow_metadata_controller,
-                       action='update_all',
-                       conditions={"method": ['PUT']})
