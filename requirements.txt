@@ -31,6 +31,8 @@ lxml>=2.3 # BSD
 os-brick!=1.4.0,>=1.0.0 # Apache-2.0
 osprofiler>=1.1.0 # Apache-2.0
 pycrypto>=2.6 # Public Domain
+python-memcached>=1.56  # PSF
+pymemcache>=1.2.9,!=1.3.0  # Apache 2.0 License
 
 # OpenStack clients
 python-novaclient>=2.29.0,!=2.33.0  # Apache-2.0
