@@ -63,9 +63,6 @@ class ViewBuilder(common.ViewBuilder):
                 'user_id': workflow.get('user_id'),
             }
         }
-        if request.environ['waterfall.context'].is_admin:
-            workflow_ref['workflow']['migration_status'] = (
-                workflow.get('migration_status'))
         return workflow_ref
 
     def _list_view(self, func, request, workflows, workflow_count,

@@ -52,6 +52,19 @@ class WorkflowController(wsgi.Controller):
         workflows = self.workflow_api.workflow_get_all(context)
         return self._view_builder.detail_list(req, workflows)
 
+    @wsgi.response(202)
+    def create(self, req, body):
+        context = req.environ['waterfall.context']
+        workflow = body['workflow']
+
+        resource_type = workflow.get("resource_type")
+        payload = workflow.get("payload")
+        workflow = self.workflow_api.workflow_create(
+                context, resource_type, payload)
+        retval = self._view_builder.detail(req, workflow)
+
+        return retval
+
     #@wsgi.response(202)
     #@wsgi.serializers(xml=WorkflowTemplate)
     #@wsgi.deserializers(xml=CreateDeserializer)

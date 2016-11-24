@@ -292,3 +292,15 @@ def model_query(context, *args, **kwargs):
 def workflow_get_all(context, filters=None):
     query = model_query(context, models.Workflow)
     return query.all()
+
+def workflow_create(context, resource_type, payload):
+    workflow_ref = models.Workflow()
+    workflow_ref.project_id = context.project_id
+    workflow_ref.user_id = context.user_id
+    workflow_ref.resource_type = resource_type
+    workflow_ref.payload = payload
+
+    session = get_session()
+    with session.begin():
+        workflow_ref.save(session)
+        return workflow_ref

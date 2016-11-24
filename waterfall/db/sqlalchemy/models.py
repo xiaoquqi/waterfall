@@ -55,7 +55,7 @@ class WaterfallBase(models.TimestampMixin,
 class Workflow(BASE, WaterfallBase):
     """Represents a block storage device that can be attached to a vm."""
     __tablename__ = 'workflows'
-    id = Column(String(36), primary_key=True)
+    id = Column(Integer, primary_key=True)
     user_id = Column(String(255))
     project_id = Column(String(255))
     resource_type = Column(String(length=255))

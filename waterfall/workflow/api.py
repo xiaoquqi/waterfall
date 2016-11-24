@@ -8,3 +8,6 @@ class API(base.Base):
 
     def workflow_get_all(self, context):
         return self.db.workflow_get_all(context)
+
+    def workflow_create(self, context, resource_type, payload):
+        return self.db.workflow_create(context, resource_type, payload)

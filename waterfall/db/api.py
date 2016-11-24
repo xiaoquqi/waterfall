@@ -144,3 +144,6 @@ class Case(object):
 def workflow_get_all(context, filters=None):
     """Get all workflows"""
     return IMPL.workflow_get_all(context, filters)
+
+def workflow_create(context, resource_type, payload):
+    return IMPL.workflow_create(context, resource_type, payload)
