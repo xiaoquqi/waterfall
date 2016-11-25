@@ -61,13 +61,9 @@ workflow_manager_opts = [
                help='Driver to use for workflows.',),
 ]
 
-# This map doesn't need to be extended in the future since it's only
-# for old workflow services
-#mapper = {'waterfall.workflow.drivers.simple'}
 
 CONF = cfg.CONF
 CONF.register_opts(workflow_manager_opts)
-#QUOTAS = quota.QUOTAS
 
 
 class WorkflowManager(manager.SchedulerDependentManager):
@@ -88,16 +84,8 @@ class WorkflowManager(manager.SchedulerDependentManager):
         """This function maps old workflow services to workflow drivers."""
 
         return CONF.workflow_driver
-        #return self._map_service_to_driver(CONF.workflow_driver)
 
-    #def _map_service_to_driver(self, service):
-    #    """Maps services to drivers."""
-
-    #    if service in mapper:
-    #        return mapper[service]
-    #    return service
-
-    @periodic_task.periodic_task(spacing=5)
+    @periodic_task.periodic_task(spacing=60)
     def period_test(self, context):
         LOG.debug("period task debuging")
 
