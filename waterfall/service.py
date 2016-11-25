@@ -135,15 +135,15 @@ class Service(service.Service):
         # result in us using None (if it's the first time the service is run)
         # or an old version (if this is a normal upgrade of a single service).
         ctxt = context.get_admin_context()
-        try:
-            service_ref = objects.Service.get_by_args(ctxt, host, binary)
-            service_ref.rpc_current_version = manager_class.RPC_API_VERSION
-            obj_version = objects_base.OBJ_VERSIONS.get_current()
-            service_ref.object_current_version = obj_version
-            service_ref.save()
-            self.service_id = service_ref.id
-        except exception.NotFound:
-            self._create_service_ref(ctxt, manager_class.RPC_API_VERSION)
+        #try:
+        #    service_ref = objects.Service.get_by_args(ctxt, host, binary)
+        #    service_ref.rpc_current_version = manager_class.RPC_API_VERSION
+        #    obj_version = objects_base.OBJ_VERSIONS.get_current()
+        #    service_ref.object_current_version = obj_version
+        #    service_ref.save()
+        #    self.service_id = service_ref.id
+        #except exception.NotFound:
+        #    self._create_service_ref(ctxt, manager_class.RPC_API_VERSION)
 
         self.manager = manager_class(host=self.host,
                                      service_name=service_name,
@@ -176,12 +176,12 @@ class Service(service.Service):
 
         self.manager.init_host_with_rpc()
 
-        if self.report_interval:
-            pulse = loopingcall.FixedIntervalLoopingCall(
-                self.report_state)
-            pulse.start(interval=self.report_interval,
-                        initial_delay=self.report_interval)
-            self.timers.append(pulse)
+        #if self.report_interval:
+        #    pulse = loopingcall.FixedIntervalLoopingCall(
+        #        self.report_state)
+        #    pulse.start(interval=self.report_interval,
+        #                initial_delay=self.report_interval)
+        #    self.timers.append(pulse)
 
         if self.periodic_interval:
             if self.periodic_fuzzy_delay:

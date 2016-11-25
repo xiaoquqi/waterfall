@@ -60,7 +60,7 @@ from oslo_service import periodic_task
 from waterfall.db import base
 from waterfall.i18n import _LI
 from waterfall import rpc
-from waterfall.scheduler import rpcapi as scheduler_rpcapi
+#from waterfall.scheduler import rpcapi as scheduler_rpcapi
 from waterfall import version
 
 from eventlet import greenpool
@@ -153,7 +153,7 @@ class SchedulerDependentManager(Manager):
     def __init__(self, host=None, db_driver=None, service_name='undefined'):
         self.last_capabilities = None
         self.service_name = service_name
-        self.scheduler_rpcapi = scheduler_rpcapi.SchedulerAPI()
+        #self.scheduler_rpcapi = scheduler_rpcapi.SchedulerAPI()
         self._tp = greenpool.GreenPool()
         super(SchedulerDependentManager, self).__init__(host, db_driver)
 
@@ -161,16 +161,16 @@ class SchedulerDependentManager(Manager):
         """Remember these capabilities to send on next periodic update."""
         self.last_capabilities = capabilities
 
-    @periodic_task.periodic_task
-    def _publish_service_capabilities(self, context):
-        """Pass data back to the scheduler at a periodic interval."""
-        if self.last_capabilities:
-            LOG.debug('Notifying Schedulers of capabilities ...')
-            self.scheduler_rpcapi.update_service_capabilities(
-                context,
-                self.service_name,
-                self.host,
-                self.last_capabilities)
+    #@periodic_task.periodic_task
+    #def _publish_service_capabilities(self, context):
+    #    """Pass data back to the scheduler at a periodic interval."""
+    #    if self.last_capabilities:
+    #        LOG.debug('Notifying Schedulers of capabilities ...')
+    #        self.scheduler_rpcapi.update_service_capabilities(
+    #            context,
+    #            self.service_name,
+    #            self.host,
+    #            self.last_capabilities)
 
     def _add_to_threadpool(self, func, *args, **kwargs):
         self._tp.spawn_n(func, *args, **kwargs)

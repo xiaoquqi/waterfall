@@ -15,7 +15,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-"""Starter script for Waterfall Workflow Backup."""
+"""Starter script for Waterfall Workflow."""
 
 import logging as python_logging
 import sys
@@ -33,7 +33,7 @@ i18n.enable_lazy()
 
 # Need to register global_opts
 from waterfall.common import config  # noqa
-from waterfall import objects
+#from waterfall import objects
 from waterfall import service
 from waterfall import utils
 from waterfall import version
@@ -43,7 +43,7 @@ CONF = cfg.CONF
 
 
 def main():
-    objects.register_all()
+    #objects.register_all()
     gmr_opts.set_defaults(CONF)
     CONF(sys.argv[1:], project='waterfall',
          version=version.version_string())
@@ -51,6 +51,6 @@ def main():
     python_logging.captureWarnings(True)
     utils.monkey_patch()
     gmr.TextGuruMeditation.setup_autorun(version, conf=CONF)
-    server = service.Service.create(binary='waterfall-backup')
+    server = service.Service.create(binary='waterfall-workflow')
     service.serve(server)
     service.wait()

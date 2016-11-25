@@ -184,12 +184,12 @@ class RPCAPI(object):
     def __init__(self):
         target = messaging.Target(topic=self.TOPIC,
                                   version=self.RPC_API_VERSION)
-        obj_version_cap = self._determine_obj_version_cap()
-        serializer = base.WaterfallObjectSerializer(obj_version_cap)
+        #obj_version_cap = self._determine_obj_version_cap()
+        #serializer = base.WaterfallObjectSerializer(obj_version_cap)
 
-        rpc_version_cap = self._determine_rpc_version_cap()
-        self.client = get_client(target, version_cap=rpc_version_cap,
-                                 serializer=serializer)
+        #rpc_version_cap = self._determine_rpc_version_cap()
+        #self.client = get_client(target, version_cap=rpc_version_cap,
+        #                         serializer=serializer)
 
     def _determine_rpc_version_cap(self):
         global LAST_RPC_VERSIONS
