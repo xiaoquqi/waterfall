@@ -62,6 +62,9 @@ class WorkflowController(wsgi.Controller):
         workflow = self.workflow_api.workflow_create(
                 context, resource_type, payload)
         retval = self._view_builder.detail(req, workflow)
+        from waterfall.workflow import rpcapi
+        workflow_rpcapi = rpcapi.WorkflowAPI()
+        workflow_rpcapi.apply_workflow(context, workflow)
 
         return retval
 

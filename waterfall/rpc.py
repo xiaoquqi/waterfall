@@ -190,6 +190,11 @@ class RPCAPI(object):
         #rpc_version_cap = self._determine_rpc_version_cap()
         #self.client = get_client(target, version_cap=rpc_version_cap,
         #                         serializer=serializer)
+        #serializer = RequestContextSerializer(serializer)
+        self.client = messaging.RPCClient(TRANSPORT,
+                                          target,
+                                          version_cap='2.0')
+                                          #serializer=serializer)
 
     def _determine_rpc_version_cap(self):
         global LAST_RPC_VERSIONS

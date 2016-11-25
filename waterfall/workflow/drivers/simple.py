@@ -21,7 +21,7 @@ CONF.register_opts(simple_opts)
 class SimpleDriver(driver.WorkflowDriver):
 
     def apply(self):
-        pass
+        LOG.debug("Simple Apply")
 
     def is_approved(self):
         pass
